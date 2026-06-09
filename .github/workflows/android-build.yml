@@ -1,0 +1,99 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_API_LEVEL: "35"
+      ANDROID_BUILD_TOOLS_VERSION: "35.0.0"
+      ANDROID_NDK_VERSION: "27.2.12479018"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android packages
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-${ANDROID_API_LEVEL}" \
+            "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" \
+            "ndk;${ANDROID_NDK_VERSION}"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Initialize Android project
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+          export ANDROID_NDK_HOME="$NDK_HOME"
+          pnpm --filter @nuclearplayer/player tauri android init --ci
+
+      - name: Build Laya Music APK
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+          export ANDROID_NDK_HOME="$NDK_HOME"
+          pnpm --filter @nuclearplayer/player tauri android build --debug --apk --target aarch64
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: laya-music-android-apk
+          path: packages/player/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+
+      - name: Publish Android release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="laya-music-android-latest"
+          mapfile -t assets < <(find packages/player/src-tauri/gen/android/app/build/outputs/apk -name "*.apk" -type f)
+
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No APK files found."
+            exit 1
+          fi
+
+          gh release delete "$tag" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
+          gh release create "$tag" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Laya Music Android APK" \
+            --notes "Automated Android APK build for Laya Music."
