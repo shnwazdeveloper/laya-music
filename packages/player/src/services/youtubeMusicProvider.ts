@@ -1,11 +1,15 @@
 import { invoke } from '@tauri-apps/api/core';
 
 import type {
+  Album,
+  AlbumRef,
+  ArtistRef,
   ArtworkSet,
   Playlist,
   Stream,
   StreamCandidate,
   Track,
+  TrackRef,
 } from '@nuclearplayer/model';
 import type {
   DashboardProvider,
@@ -40,6 +44,14 @@ type YtMusicSearchResult = {
   url: string;
 };
 
+type CandidateSource = {
+  id: string;
+  title: string;
+  durationMs?: number;
+  thumbnail?: string | null;
+  url?: string;
+};
+
 let ytdlpReadyPromise: Promise<boolean> | null = null;
 
 const ensureYtdlpReady = async (): Promise<void> => {
@@ -55,7 +67,7 @@ const ensureYtdlpReady = async (): Promise<void> => {
 
 const ytmusicSearch = async (
   query: string,
-  maxResults = 20,
+  maxResults = 50,
 ): Promise<YtMusicSearchResult[]> =>
   invoke<YtMusicSearchResult[]>('ytmusic_search', {
     query,
@@ -66,6 +78,27 @@ const providerRef = (id: string, url?: string) => ({
   provider: METADATA_PROVIDER_ID,
   id,
   url,
+});
+
+const decodeIdPart = (value: string): string => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+};
+
+const artistSourceId = (name: string) => `artist:${encodeURIComponent(name)}`;
+
+const artistRefFromName = (name: string): ArtistRef => ({
+  name,
+  source: providerRef(artistSourceId(name)),
+});
+
+const artistCreditFromName = (name: string) => ({
+  name,
+  roles: ['main'],
+  source: providerRef(artistSourceId(name)),
 });
 
 const artworkFromThumbnail = (
@@ -85,28 +118,44 @@ const artworkFromThumbnail = (
       }
     : undefined;
 
+const albumQueryFromResult = (result: YtMusicSearchResult): string =>
+  [
+    result.artists.length ? result.artists.join(' ') : undefined,
+    result.album ?? result.title,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+
+const albumSourceIdFromResult = (result: YtMusicSearchResult): string =>
+  `album:${encodeURIComponent(albumQueryFromResult(result) || result.id)}`;
+
+const albumRefFromResult = (
+  result: YtMusicSearchResult,
+): AlbumRef | undefined => {
+  if (!result.album) {
+    return undefined;
+  }
+
+  const artists = result.artists.length ? result.artists : ['YouTube Music'];
+  const artwork = artworkFromThumbnail(result.thumbnail);
+
+  return {
+    title: result.album,
+    artists: artists.map(artistRefFromName),
+    artwork,
+    source: providerRef(albumSourceIdFromResult(result), result.url),
+  };
+};
+
 const trackFromResult = (result: YtMusicSearchResult): Track => {
   const artwork = artworkFromThumbnail(result.thumbnail);
   const artists = result.artists.length ? result.artists : ['YouTube Music'];
 
   return {
     title: result.title,
-    artists: artists.map((name) => ({
-      name,
-      roles: ['main'],
-      source: providerRef(`artist:${name}`),
-    })),
-    album: result.album
-      ? {
-          title: result.album,
-          artists: artists.map((name) => ({
-            name,
-            source: providerRef(`artist:${name}`),
-          })),
-          artwork,
-          source: providerRef(`album:${result.id}`, result.url),
-        }
-      : undefined,
+    artists: artists.map(artistCreditFromName),
+    album: albumRefFromResult(result),
     durationMs: result.duration_ms ?? undefined,
     artwork,
     source: providerRef(result.id, result.url),
@@ -140,6 +189,53 @@ const candidateFromTrack = (track: Track): StreamCandidate => ({
   },
 });
 
+const candidateFromSource = (source: CandidateSource): StreamCandidate => ({
+  id: source.id,
+  title: source.title,
+  durationMs: source.durationMs,
+  thumbnail: source.thumbnail ?? undefined,
+  failed: false,
+  source: {
+    provider: STREAMING_PROVIDER_ID,
+    id: source.id,
+    url: source.url ?? `https://www.youtube.com/watch?v=${source.id}`,
+  },
+});
+
+const uniqueCandidates = (candidates: StreamCandidate[]): StreamCandidate[] => {
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    if (seen.has(candidate.id)) {
+      return false;
+    }
+    seen.add(candidate.id);
+    return true;
+  });
+};
+
+const searchFallbackCandidates = async (
+  query: string,
+): Promise<StreamCandidate[]> => {
+  const [ytMusicResults, youtubeResults] = await Promise.all([
+    ytmusicSearch(query, 10).catch(() => []),
+    ensureYtdlpReady()
+      .then(() => ytdlpHost.search(query, 10))
+      .catch(() => []),
+  ]);
+
+  return uniqueCandidates([
+    ...ytMusicResults.map(candidateFromResult),
+    ...youtubeResults.map((result) =>
+      candidateFromSource({
+        id: result.id,
+        title: result.title,
+        durationMs: result.duration ? Math.round(result.duration * 1000) : undefined,
+        thumbnail: result.thumbnail,
+      }),
+    ),
+  ]);
+};
+
 const streamFromVideoId = async (videoId: string): Promise<Stream> => {
   await ensureYtdlpReady();
 
@@ -166,20 +262,96 @@ const searchTracks = async (
   query: string,
   limit?: number,
 ): Promise<Track[]> => {
-  const results = await ytmusicSearch(query, limit ?? 20);
+  const results = await ytmusicSearch(query, limit ?? 50);
   return results.map(trackFromResult);
+};
+
+const albumsFromTracks = (tracks: Track[], limit?: number): AlbumRef[] => {
+  const albums = tracks
+    .map((track) => track.album)
+    .filter((album): album is AlbumRef => Boolean(album));
+
+  const seen = new Set<string>();
+  return albums
+    .filter((album) => {
+      const key = `${album.title.toLowerCase()}::${album.artists
+        ?.map((artist) => artist.name.toLowerCase())
+        .join(',')}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit ?? 50);
+};
+
+const searchAlbums = async (
+  query: string,
+  limit?: number,
+): Promise<AlbumRef[]> => {
+  const tracks = await searchTracks(query, limit ?? 50);
+  return albumsFromTracks(tracks, limit);
+};
+
+const albumQueryFromId = (albumId: string): string => {
+  const decoded = decodeIdPart(albumId);
+  const withoutPrefix = decoded.startsWith('album:')
+    ? decoded.slice('album:'.length)
+    : decoded;
+  return decodeIdPart(withoutPrefix).trim() || 'top songs';
+};
+
+const trackRefFromTrack = (track: Track): TrackRef => ({
+  title: track.title,
+  artists: track.artists.map((artist) =>
+    artistRefFromName(artist.name || 'YouTube Music'),
+  ),
+  artwork: track.artwork,
+  source: track.source,
+});
+
+const fetchAlbumDetails = async (albumId: string): Promise<Album> => {
+  const query = albumQueryFromId(albumId);
+  let tracks = await searchTracks(query, 50);
+
+  if (!tracks.length && query !== 'top songs') {
+    tracks = await searchTracks('top songs', 50);
+  }
+
+  const firstAlbum = tracks.find((track) => track.album)?.album;
+  const firstTrack = tracks[0];
+  const artists =
+    firstAlbum?.artists?.map((artist) => artistCreditFromName(artist.name)) ??
+    firstTrack?.artists ??
+    [artistCreditFromName('YouTube Music')];
+
+  return {
+    title: firstAlbum?.title ?? query,
+    artists,
+    tracks: tracks.map(trackRefFromTrack),
+    artwork: firstAlbum?.artwork ?? firstTrack?.artwork,
+    source: providerRef(albumId),
+  };
 };
 
 const youtubeMusicMetadataProvider: MetadataProvider = {
   id: METADATA_PROVIDER_ID,
   name: 'YouTube Music',
   kind: 'metadata',
-  searchCapabilities: ['unified', 'tracks'],
+  searchCapabilities: ['unified', 'tracks', 'albums'],
+  albumMetadataCapabilities: ['albumDetails'],
   streamingProviderId: STREAMING_PROVIDER_ID,
-  search: async ({ query, limit }) => ({
-    tracks: await searchTracks(query, limit),
-  }),
+  search: async ({ query, limit }) => {
+    const tracks = await searchTracks(query, limit ?? 50);
+    return {
+      albums: albumsFromTracks(tracks, limit),
+      tracks,
+    };
+  },
+  searchAlbums: async ({ query, limit }) => searchAlbums(query, limit),
   searchTracks: async ({ query, limit }) => searchTracks(query, limit),
+  fetchAlbumDetails,
 };
 
 const youtubeMusicStreamingProvider: StreamingProvider = {
@@ -188,20 +360,22 @@ const youtubeMusicStreamingProvider: StreamingProvider = {
   kind: 'streaming',
   searchForTrack: async (artist, title, album) => {
     const query = [artist, title, album].filter(Boolean).join(' ');
-    const results = await ytmusicSearch(query, 5);
-    return results.map(candidateFromResult);
+    return searchFallbackCandidates(query);
   },
   searchForTrackV2: async (track) => {
-    if (track.source.provider === METADATA_PROVIDER_ID) {
-      return [candidateFromTrack(track)];
-    }
-
     const artist = track.artists[0]?.name;
     const query = [artist, track.title, track.album?.title]
       .filter(Boolean)
       .join(' ');
-    const results = await ytmusicSearch(query, 5);
-    return results.map(candidateFromResult);
+
+    if (track.source.provider === METADATA_PROVIDER_ID) {
+      return uniqueCandidates([
+        candidateFromTrack(track),
+        ...(await searchFallbackCandidates(query)),
+      ]);
+    }
+
+    return searchFallbackCandidates(query);
   },
   getStreamUrl: streamFromVideoId,
   getStreamUrlV2: (candidate) => streamFromVideoId(candidate.id),

@@ -37,10 +37,7 @@ export const ConnectedTrackTable: FC<ConnectedTrackTableProps> = (props) => {
         onToggleFavorite: trackActions.toggleFavorite,
         onRemove: externalActions?.onRemove,
         onReorder: externalActions?.onReorder,
-        onPlayAll: () => {
-          queueActions.clearQueue();
-          queueActions.addToQueue(restProps.tracks);
-        },
+        onPlayAll: () => queueActions.playAll(restProps.tracks),
         onAddAllToQueue: () => {
           queueActions.addToQueue(restProps.tracks);
         },

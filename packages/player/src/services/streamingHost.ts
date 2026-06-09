@@ -31,6 +31,15 @@ const isStreamExpired = (candidate: StreamCandidate): boolean => {
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+const isPermanentResolutionError = (error: unknown): boolean => {
+  const message = resolveErrorMessage(error).toLowerCase();
+  return (
+    message.includes('requested format is not available') ||
+    message.includes('video unavailable') ||
+    message.includes('no stream url returned')
+  );
+};
+
 const withRetry = async <T>(
   fn: () => Promise<T>,
   maxAttempts: number,
@@ -40,7 +49,7 @@ const withRetry = async <T>(
     try {
       return await fn();
     } catch (error) {
-      if (attempt === maxAttempts - 1) {
+      if (isPermanentResolutionError(error) || attempt === maxAttempts - 1) {
         throw error;
       }
       await sleep(baseDelayMs * 2 ** attempt);

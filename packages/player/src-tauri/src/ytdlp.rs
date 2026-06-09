@@ -161,7 +161,7 @@ pub async fn ytdlp_get_stream(video_id: String) -> Result<YtdlpStreamInfo, Strin
     };
     let stdout = run_ytdlp(&[
         "-f",
-        "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
+        "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio*/best",
         "--extractor-args",
         "youtube:player_client=web_music,web",
         "--add-header",
