@@ -32,7 +32,7 @@
     "longDescription": "Laya Music is a desktop music player powered by YouTube Music search and YouTube audio streaming.",
     "copyright": "Copyright 2026 SHNWAZ Developer",
     "homepage": "https://github.com/shnwazdeveloper/laya-music",
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "targets": "all",
     "icon": [
       "icons/icon.png",
