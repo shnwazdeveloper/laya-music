@@ -71,4 +71,4 @@ jobs:
             --target $env:GITHUB_SHA `
             --title "Laya Music Windows" `
             --notes "Automated Windows installer build for Laya Music." `
-            --prerelease
+            --latest
