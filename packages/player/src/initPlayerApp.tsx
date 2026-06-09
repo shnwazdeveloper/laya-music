@@ -13,9 +13,11 @@ import {
   applyLanguageFromSettings,
   initLanguageWatcher,
 } from './services/languageService';
+import { Logger } from './services/logger';
 import { loadMarketplaceThemes } from './services/marketplaceThemeDirService';
 import { initMcpHandler } from './services/mcp';
 import { initMpdHandler } from './services/mpd';
+import { providersStoreReady } from './services/providersHost';
 import { ytdlpEnsureInstalled } from './services/tauri/commands';
 import { bootstrapBuiltInProviders } from './services/youtubeMusicProvider';
 import { initializeFavoritesStore } from './stores/favoritesStore';
@@ -36,6 +38,7 @@ export const initPlayerApp = async (
     .then(() => initializeQueueStore())
     .then(() => initializeFavoritesStore())
     .then(() => initializePlaylistStore())
+    .then(() => providersStoreReady)
     .then(() => registerBuiltInCoreSettings())
     .then(() => initDiscoveryService())
     .then(() => initMcpHandler())
@@ -49,10 +52,17 @@ export const initPlayerApp = async (
     .then(() => loadMarketplaceThemes())
     .then(() => hydrateThemeStore())
     .then(() => applyAdvancedThemeFromSettingsIfAny())
+    .then(() =>
+      ytdlpEnsureInstalled().catch((error) => {
+        Logger.streaming.error(
+          `yt-dlp setup failed before provider bootstrap: ${String(error)}`,
+        );
+        return false;
+      }),
+    )
     .then(() => bootstrapBuiltInProviders())
     .then(() => {
       void useUpdaterStore.getState().checkForUpdate();
-      void ytdlpEnsureInstalled();
     });
 
   root.render(

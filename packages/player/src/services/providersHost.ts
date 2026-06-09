@@ -177,4 +177,4 @@ export const providersHost: ProvidersHost = createProvidersHost();
 
 setupStreamingPairingSync(providersHost);
 
-void initializeProvidersStore();
+export const providersStoreReady = initializeProvidersStore();

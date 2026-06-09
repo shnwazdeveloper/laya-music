@@ -154,10 +154,20 @@ pub async fn ytdlp_search(
 pub async fn ytdlp_get_stream(video_id: String) -> Result<YtdlpStreamInfo, String> {
     debug!("[yt-dlp] Getting stream for: {}", video_id);
 
-    let url = format!("https://www.youtube.com/watch?v={}", video_id);
+    let url = if video_id.starts_with("http://") || video_id.starts_with("https://") {
+        video_id
+    } else {
+        format!("https://music.youtube.com/watch?v={}", video_id)
+    };
     let stdout = run_ytdlp(&[
         "-f",
         "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
+        "--extractor-args",
+        "youtube:player_client=web_music,web",
+        "--add-header",
+        "Origin:https://music.youtube.com",
+        "--add-header",
+        "Referer:https://music.youtube.com/",
         "--dump-json",
         "--no-playlist",
         "--no-warnings",

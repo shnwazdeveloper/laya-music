@@ -16,6 +16,7 @@ import type {
 
 import { useStartupStore } from '../stores/startupStore';
 import { providersHost } from './providersHost';
+import { ytdlpEnsureInstalled } from './tauri/commands';
 import { ytdlpHost } from './ytdlpHost';
 
 const METADATA_PROVIDER_ID = 'youtube-music-metadata';
@@ -37,6 +38,19 @@ type YtMusicSearchResult = {
   duration_ms: number | null;
   thumbnail: YtMusicThumbnail | null;
   url: string;
+};
+
+let ytdlpReadyPromise: Promise<boolean> | null = null;
+
+const ensureYtdlpReady = async (): Promise<void> => {
+  if (!ytdlpReadyPromise) {
+    ytdlpReadyPromise = ytdlpEnsureInstalled().catch((error) => {
+      ytdlpReadyPromise = null;
+      throw error;
+    });
+  }
+
+  await ytdlpReadyPromise;
 };
 
 const ytmusicSearch = async (
@@ -127,6 +141,8 @@ const candidateFromTrack = (track: Track): StreamCandidate => ({
 });
 
 const streamFromVideoId = async (videoId: string): Promise<Stream> => {
+  await ensureYtdlpReady();
+
   const stream = await ytdlpHost.getStream(videoId);
   const protocol = stream.stream_url.startsWith('https') ? 'https' : 'http';
 
